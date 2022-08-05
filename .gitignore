@@ -1,0 +1,7 @@
+.envrc
+*-openrc.sh
+id_*
+terraform/.terraform*
+*.tfstate*
+inventory
+ssh-agent.sh

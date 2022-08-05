@@ -1,0 +1,212 @@
+---
+- name: install mailman
+  hosts: mailman
+  become: true
+  vars:
+
+    relayhost: "[mail.infomaniak.com]:submission"
+    mailman_web_proto: http
+
+  tasks:
+
+    - name: check openstack variables
+      assert:
+        that:
+          - lookup('env', '{{ item }}') != ''
+        fail_msg: "Please define {{ item }} environment variable"
+      loop:
+        - OS_AUTH_URL
+        - OS_PROJECT_NAME
+        - OS_USER_DOMAIN_NAME
+        - OS_USERNAME
+        - OS_PASSWORD
+        - OS_REGION_NAME
+        - OS_IDENTITY_API_VERSION
+
+    - name: check inventory variables
+      assert:
+        that:
+          - fqdn is defined
+          - mail_host is defined
+          - mail_account is defined
+          - mail_password is defined
+          - mailman_user is defined
+          - mailman_password is defined
+          - mailman_domain is defined
+          - mailman_email is defined
+
+    - name: "postfix debconf"
+      debconf:
+        name: postfix
+        question: "{{ item.question }}"
+        value: "{{ item.value }}"
+        vtype: "{{ item.vtype }}"
+      loop:
+        -
+          question: "postfix/main_mailer_type"
+          value: "Internet with smarthost"
+          vtype: "select"
+        -
+          question: "postfix/relayhost"
+          value: "[{{ mail_host }}]:submission"
+          vtype: "string"
+        -
+          question: "postfix/mailname"
+          vtype: "string"
+          value: "{{ fqdn }}"
+
+    - name: mailman3-web debconf
+      debconf:
+        name: mailman3-web
+        question: "{{ item.question }}"
+        value: "{{ item.value }}"
+        vtype: "{{ item.vtype }}"
+      loop:
+        -
+          question: "mailman3-web/superuser-name"
+          value: "{{ mailman_user }}"
+          vtype: "string"
+        -
+          question: "mailman3-web/superuser-password"
+          value: "{{ mailman_password }}"
+          vtype: "password"
+        -
+          question: "mailman3-web/emailname"
+          value: "{{ mailman_domain }}"
+          vtype: "string"
+        -
+          question: "mailman3-web/superuser-mail"
+          value: "{{ mailman_email }}"
+          vtype: "string"
+        -
+          question: mailman3-web/configure-webserver
+          vtype: select
+          value: apache2
+        -
+          question: mailman3-web/restart-webserver
+          vtype: boolean
+          value: true
+
+    - name: install packages
+      apt:
+        name:
+          - postfix
+          - mailman3-full
+          - fetchmail
+        update_cache: true
+        state: present
+
+    # - name: postfix main.cf
+    #   template:
+    #     dest: /etc/postfix/main.cf
+    #   notify: restart postfix
+
+    # postfix
+
+    - name: postfix sasl configuration
+      template:
+        dest: /etc/postfix/sasl_passwd
+        src: postfix/sasl_passwd.j2
+      register: sasl_passwd
+
+    - name: gen sasl postfix map
+      command: postmap /etc/postfix/sasl_passwd
+      when: sasl_passwd.changed
+
+    - name: postfix smtp_tls_security_level
+      lineinfile:
+        path: /etc/postfix/main.cf
+        line: "smtp_tls_security_level=encrypt"
+        regex: "^smtp_tls_security_level=.*"
+      notify: restart postfix
+
+    - name: postfix smtp authentication
+      blockinfile:
+        path: /etc/postfix/main.cf
+        block: |
+          smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd
+          smtp_sasl_auth_enable = yes
+          smtp_sasl_tls_security_options = noanonymous
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - smtp authentication"
+      notify: restart postfix
+
+    - name: postfix mailman related
+      blockinfile:
+        path: /etc/postfix/main.cf
+        block: |
+          {% raw -%}
+          owner_request_special = no
+          transport_maps = hash:/var/lib/mailman3/data/postfix_lmtp
+          local_recipient_maps = proxy:unix:passwd.byname $alias_maps hash:/var/lib/mailman3/data/postfix_lmtp
+          relay_domains = ${{$compatibility_level} < {2} ? {$mydestination} : {}} hash:/var/lib/mailman3/data/postfix_domains
+          {% endraw %}
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - mailman"
+      notify: restart postfix
+
+    # mailman
+    - name: mailman site owner
+      lineinfile:
+        path: /etc/mailman3/mailman.cfg
+        line: "site_owner: {{ mailman_email }}"
+        regexp: "^site_owner:.*"
+      notify: restart mailman
+
+    # fetchmail
+    - name: activate fetchmail
+      lineinfile:
+        path: /etc/default/fetchmail
+        line: "START_DAEMON=yes"
+        regexp: "^START_DAEMON=.*"
+      notify: restart fetchmail
+
+    - name: fetchmail configuration
+      template:
+        src: fetchmail/fetchmailrc.j2
+        dest: /etc/fetchmailrc
+      notify: restart fetchmail
+
+    # mailman-web
+    - name: get django domain
+      command: "sqlite3 /var/lib/mailman3/web/mailman3web.db 'select domain from django_site where id = 1'"
+      register: django_site
+      changed_when: false
+
+    - name: update django domain
+      command: >
+        sqlite3 /var/lib/mailman3/web/mailman3web.db
+        'update django_site set name = "{{ mailman_domain }}", domain = "{{ mailman_domain }}" where id = 1;'
+      notify: restart mailman3-web
+
+    - name: web interface http or https
+      lineinfile:
+        path: /etc/mailman3/mailman-web.py
+        line: >
+          ACCOUNT_DEFAULT_HTTP_PROTOCOL = "{{ mailman_web_proto }}"
+        regex: "^ACCOUNT_DEFAULT_HTTP_PROTOCOL.*"
+      notify: restart mailman3-web
+
+  handlers:
+    - name: restart postfix
+      service:
+        name: postfix
+        state: restarted
+
+    - name: restart fetchmail
+      service:
+        name: fetchmail
+        state: restarted
+
+    - name: restart apache
+      service:
+        name: apache2
+        state: restarted
+
+    - name: restart mailman
+      service:
+        name: mailman3
+        state: restarted
+
+    - name: restart mailman3-web
+      service:
+        name: mailman3-web
+        state: restarted

@@ -1,0 +1,8 @@
+set daemon 300
+set syslog 
+
+poll mail.infomaniak.com localdomains parano.ch with proto IMAP
+  envelope Delivered-To
+  user '{{ mail_account }}' there with password '{{ mail_password }}'
+  to * here
+  idle fetchall ssl
