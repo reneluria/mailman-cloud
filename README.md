@@ -13,6 +13,8 @@ On a classic install, you have to tweak the mail server at your domain to pipe e
 Installation
 ------------
 
+*TODO* guide for https (certbot)
+
 ### Services
 
 First we need openstack credentials that we obtain after project creation at Infomaniak
@@ -131,9 +133,13 @@ mailman                    : ok=19   changed=17   unreachable=0    failed=0    s
 
 ### Usage
 
-Log in to the interface http://[2001:1600:x:x::xxx]/mailman3 with the mailman login and password you defined in the inventory
+Log in to the interface `http://[2001:1600:x:x::xxx]/mailman3` with the mailman login and password you defined in the inventory, replacing with the ip of your instance
 
 -> Create a domain
 -> Create a list "mylist"
+
+In the list paremeters
+- DMARC Mitigations, I recommend using "Replace from with list address"
+- Alter Messages, I recommend using "Reply to the list" and "First strip reply to"
 
 Done :)
